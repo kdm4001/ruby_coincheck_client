@@ -1,6 +1,6 @@
-require_relative "./ruby_coincheck_client/version"
-require_relative "./ruby_coincheck_client/coincheck_client"
+# frozen_string_literal: true
 
-module RubyCoincheckClient
-
-end
+require_relative "ruby_coincheck_client/version"
+require_relative "ruby_coincheck_client/errors"
+require_relative "ruby_coincheck_client/client"
+require_relative "ruby_coincheck_client/coincheck_client"

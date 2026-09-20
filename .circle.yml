@@ -1,36 +1,30 @@
-version: 2
+version: 2.1
+
 jobs:
-  build:
+  test:
     docker:
-       - image: circleci/ruby:2.4.1-node-browsers
-    working_directory: ~/repo
+      - image: cimg/ruby:3.2
+    working_directory: ~/project
     steps:
       - checkout
       - restore_cache:
           keys:
-          - v1-dependencies-{{ checksum "Gemfile.lock" }}
-          - v1-dependencies-
+            - bundle-v2-{{ checksum "Gemfile.lock" }}
+            - bundle-v2-
       - run:
-          name: install dependencies
+          name: Install dependencies
           command: |
-            bundle install --jobs=4 --retry=3 --path vendor/bundle
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=4 --retry=3
       - save_cache:
+          key: bundle-v2-{{ checksum "Gemfile.lock" }}
           paths:
-            - ./vendor/bundle
-          key: v1-dependencies-{{ checksum "Gemfile.lock" }}
+            - vendor/bundle
       - run:
-          name: run tests
-          command: |
-            mkdir /tmp/test-results
-            TEST_FILES="$(circleci tests glob "spec/**/*_spec.rb" | circleci tests split --split-by=timings)"
+          name: Run tests
+          command: bundle exec rake
 
-            bundle exec rspec --format progress \
-                            --format RspecJunitFormatter \
-                            --out /tmp/test-results/rspec.xml \
-                            --format progress \
-                            "${TEST_FILES}"
-      - store_test_results:
-          path: /tmp/test-results
-      - store_artifacts:
-          path: /tmp/test-results
-          destination: test-results
+workflows:
+  test:
+    jobs:
+      - test

@@ -1,66 +1,152 @@
-[![CircleCI](https://circleci.com/gh/coincheckjp/ruby_coincheck_client.svg?style=svg)](https://circleci.com/gh/coincheckjp/ruby_coincheck_client)
-
 # RubyCoincheckClient
 
-This is ruby client implementation for Coincheck API.
+A small Ruby client for the [Coincheck Exchange API](https://coincheck.com/ja/documents/exchange/api).
+
+It supports the documented REST public and private endpoints, authenticated request signing, monotonic nonces, configurable timeouts, and structured errors. Responses are returned as parsed JSON (`Hash` or `Array`).
 
 ## Installation
 
-Add this line to your application's Gemfile:
+Add the gem to your application:
 
 ```ruby
-gem 'ruby_coincheck_client'
+gem "ruby_coincheck_client"
 ```
 
-And then execute:
-
-    $ bundle
-
-Or install it yourself as:
-
-    $ gem install ruby_coincheck_client
+Then run `bundle install`.
 
 ## Usage
 
 ```ruby
-#!/usr/bin/env ruby -Ilib
-require 'ruby_coincheck_client'
+require "ruby_coincheck_client"
 
-cc = CoincheckClient.new("YOUR API KEY", "YOUR SECRET KEY")
-response = cc.read_balance
-response = cc.read_accounts
-response = cc.read_transactions
-response = cc.read_orders
-response = cc.read_orders_rate(order_type: 'buy', amount: "0.01")
-response = cc.create_orders(rate: "40001", amount: "0.01", order_type: "buy")
-response = cc.create_orders(rate: "50001", amount: "0.001", order_type: "sell")
-response = cc.create_orders(market_buy_amount: 100, order_type: "market_buy")
-response = cc.create_orders(amount: "0.001", order_type: "market_sell")
-response = cc.cancel_order(id: "2503344")
-response = cc.create_send_money(address: "136aHpRdd7eezbEusAKS2GyWx9eXZsEuMz", amount: "0.0005")
-response = cc.read_send_crypto
-response = cc.read_deposits
-response = cc.read_ticker
-response = cc.read_all_trades
-response = cc.read_rate
-response = cc.read_order_books
-response = cc.read_bank_accounts
-response = cc.delete_bank_accounts(id: "2222")
-response = cc.read_jpy_withdraws
-response = cc.delete_jpy_withdraws
-JSON.parse(response.body)
+client = RubyCoincheckClient::Client.new
+ticker = client.ticker(pair: "btc_jpy")
+puts ticker.fetch("last")
 ```
+
+Private endpoints require an API key and secret:
+
+```ruby
+client = RubyCoincheckClient::Client.new(
+  ENV.fetch("COINCHECK_API_KEY"),
+  ENV.fetch("COINCHECK_API_SECRET")
+)
+
+balance = client.balance
+orders = client.orders(pair: "btc_jpy")
+```
+
+`CoincheckClient.new` remains available as a compatibility alias.
+
+## Public API
+
+```ruby
+client.ticker(pair: "btc_jpy")
+client.trades(pair: "btc_jpy", limit: 20, order: "desc")
+client.order_book(pair: "btc_jpy")
+client.order_rate(order_type: "buy", amount: "0.01", pair: "btc_jpy")
+client.rate(pair: "btc_jpy")
+client.exchange_status
+client.exchange_status(pair: "btc_jpy")
+```
+
+## Orders
+
+```ruby
+# Limit order
+client.create_order(
+  order_type: "buy",
+  pair: "btc_jpy",
+  rate: "40000",
+  amount: "0.01",
+  time_in_force: "post_only"
+)
+
+# Market orders
+client.create_order(order_type: "market_buy", market_buy_amount: "10000")
+client.create_order(order_type: "market_sell", amount: "0.01")
+
+client.order(id: 12345)
+client.orders
+client.cancel_order(id: 12345)
+client.cancel_status(id: 12345)
+client.cancel_all_orders(pair: "btc_jpy")
+client.transactions
+client.transactions_pagination(limit: 25, order: "desc")
+```
+
+## Account and transfers
+
+```ruby
+client.balance
+client.account
+
+client.send_money(
+  remittee_list_id: 12345,
+  amount: "0.001",
+  purpose_type: "keep_own_private_wallet"
+)
+client.send_money_history(currency: "BTC")
+client.deposits(currency: "BTC")
+```
+
+Coincheck's current send-money API requires a registered `remittee_list_id` and a `purpose_type`; it no longer accepts a raw address.
+
+## JPY withdrawals
+
+```ruby
+client.bank_accounts
+client.create_bank_account(
+  bank_name: "Bank",
+  branch_name: "Branch",
+  bank_account_type: "futsu",
+  number: "****456",
+  name: "TARO YAMADA"
+)
+client.delete_bank_account(id: 42)
+
+client.withdraws(limit: 25, order: "desc")
+client.create_withdraw(bank_account_id: 42, amount: "10000")
+client.cancel_withdraw(id: 99)
+```
+
+## Errors and configuration
+
+HTTP failures raise `RubyCoincheckClient::HTTPError`. The exception exposes `status`, `headers`, and the parsed `body`. A JSON response containing `"success": false` raises `RubyCoincheckClient::APIError`; invalid JSON raises `RubyCoincheckClient::ResponseError`.
+
+```ruby
+begin
+  client.balance
+rescue RubyCoincheckClient::HTTPError => error
+  warn "HTTP #{error.status}: #{error.body.inspect}"
+end
+```
+
+Timeouts and the API base URL can be configured per client:
+
+```ruby
+client = RubyCoincheckClient::Client.new(
+  api_key,
+  api_secret,
+  open_timeout: 5,
+  read_timeout: 15,
+  base_url: "https://coincheck.com/"
+)
+```
+
+TLS certificates are verified by default. `verify_ssl: false` exists only for controlled local testing and should not be used against the production API.
+
+## Compatibility names
+
+The original `read_*` names are retained as aliases, including `read_ticker`, `read_all_trades`, `read_order_books`, `read_balance`, `read_accounts`, `read_orders`, and `read_transactions`. New code should use the shorter names shown above.
+
+All methods return parsed JSON. Older README versions incorrectly showed calls to `.body` on these return values.
 
 ## Development
 
-After checking out the repo, run `bin/setup` to install dependencies. Then, run `bin/console` for an interactive prompt that will allow you to experiment.
+```console
+bin/setup
+bundle exec rake
+```
 
-To install this gem onto your local machine, run `bundle exec rake install`. To release a new version, update the version number in `version.rb`, and then run `bundle exec rake release` to create a git tag for the version, push git commits and tags, and push the `.gem` file to [rubygems.org](https://rubygems.org).
-
-## Contributing
-
-1. Fork it ( https://github.com/coincheckjp/ruby_coincheck_client/fork )
-2. Create your feature branch (`git checkout -b my-new-feature`)
-3. Commit your changes (`git commit -am 'Add some feature'`)
-4. Push to the branch (`git push origin my-new-feature`)
-5. Create a new Pull Request
+Use `bin/console` for an interactive session.

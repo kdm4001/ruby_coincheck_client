@@ -1,6 +1,5 @@
-$LOAD_PATH.unshift File.expand_path('../../lib', __FILE__)
-require_relative '../lib/ruby_coincheck_client'
-require 'webmock'
+# frozen_string_literal: true
 
-include WebMock::API
-WebMock.enable!
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+require_relative '../lib/ruby_coincheck_client'
+require "webmock/rspec"

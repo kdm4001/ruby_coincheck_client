@@ -1,8 +1,11 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
 require_relative '../lib/ruby_coincheck_client'
 
-cc = CoincheckClient.new
-puts cc.read_ticker.body
-puts cc.read_trades.body
-puts cc.read_rate.body
-puts cc.read_order_books.body
-puts cc.read_orders_rate(order_type: 'sell', price: 100000).body
+client = RubyCoincheckClient::Client.new
+puts client.ticker
+puts client.trades
+puts client.rate
+puts client.order_book
+puts client.order_rate(order_type: "sell", price: 100_000)

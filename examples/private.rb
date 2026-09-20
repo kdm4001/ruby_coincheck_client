@@ -1,10 +1,14 @@
-require_relative '../lib/ruby_coincheck_client'
-require 'dotenv'
-Dotenv.load ".env"
+#!/usr/bin/env ruby
+# frozen_string_literal: true
 
-cc = CoincheckClient.new(ENV['API_KEY'], ENV['SECRET_KEY'])
-puts cc.read_balance.body
-puts cc.read_accounts.body
-puts cc.read_transactions.body
-puts cc.read_trades().body
-puts cc.read_page_transactions.body
+require_relative '../lib/ruby_coincheck_client'
+
+client = RubyCoincheckClient::Client.new(
+  ENV.fetch("COINCHECK_API_KEY"),
+  ENV.fetch("COINCHECK_API_SECRET")
+)
+
+puts client.balance
+puts client.account
+puts client.transactions
+puts client.transactions_pagination(limit: 25, order: "desc")

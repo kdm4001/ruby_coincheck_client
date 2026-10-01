@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Coincheck Local · 自分の取引デスク</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><span class="brand-icon">C</span>Coincheck <span class="brand-local">LOCAL</span></a>
+    <button id="mobile-menu-toggle" class="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="mobile-header-menu"><span></span><span></span><span></span><b class="sr-only">メニュー</b></button>
+    <span class="top-caption">自分の取引デスク</span>
+    <nav class="top-nav" aria-label="ページ内ナビゲーション"><a href="#portfolio">資産</a><a href="#market">マーケット</a><a href="#orders">注文</a></nav>
+    <div id="mobile-header-menu" class="header-tools"><div class="connection"><span id="public-status" class="badge">相場 · 接続待ち</span><span id="private-status" class="badge">アカウント · 未接続</span></div><button id="theme-toggle" class="quiet theme-toggle" type="button" aria-label="ダークモードに切り替え">☾ ダーク</button><button id="open-settings" class="quiet">API キー設定</button><button id="logout" class="quiet">ログアウト</button></div>
+  </header>
+  <main>
+    <div class="page-heading"><div><p class="eyebrow">YOUR PORTFOLIO</p><h1>保有残高</h1></div><button id="refresh" class="quiet">↻ 更新</button></div>
+    <div id="notice" class="notice" role="status" aria-live="polite">接続しています…</div>
+    <div id="setup" class="setup" hidden><strong>相場は API キーなしで利用できます。</strong><span>残高・取引履歴・注文を使うには、右上の「API キー設定」から登録してください。</span></div>
+    <section id="portfolio" class="panel portfolio-panel" aria-labelledby="portfolio-title">
+      <div class="portfolio-summary"><div class="portfolio-summary-main"><p class="eyebrow">TOTAL ASSETS <span>· JPY</span></p><h2>いまの総資産</h2><strong id="total-assets">—</strong><p id="valuation-status" class="muted">API キーを登録すると表示されます</p></div><div class="portfolio-orbit" aria-hidden="true"><span class="orbit-core">C</span><span class="orbit-ring ring-one"></span><span class="orbit-ring ring-two"></span><span class="orbit-dot dot-one"></span><span class="orbit-dot dot-two"></span></div></div>
+      <div class="panel-heading"><h2 id="portfolio-title">通貨別残高</h2><span id="balance-status" class="muted">API キー未設定</span></div>
+      <div class="table-scroll"><table><thead><tr><th>通貨</th><th>合計数量（借入控除後）</th><th>利用可能</th><th>注文中</th><th>日本円換算（概算）</th></tr></thead><tbody id="balances"><tr><td colspan="5" class="empty">API キーを設定すると表示されます</td></tr></tbody></table></div>
+    </section>
+    <div id="market" class="page-heading market-heading"><div><p class="eyebrow">MARKET PULSE</p><h2>マーケット</h2></div><div class="toolbar"><label for="pair">通貨ペア</label><select id="pair" aria-label="通貨ペア"><option value="btc_jpy">BTC / JPY</option><option value="eth_jpy">ETH / JPY</option><option value="xrp_jpy">XRP / JPY</option><option value="sol_jpy">SOL / JPY</option></select></div></div>
+    <section class="metrics" aria-label="マーケット概要">
+      <div class="metric primary"><span id="market-name">BTC / JPY</span><strong id="last-price">—</strong><small id="price-time">価格を取得中</small></div>
+      <div class="metric"><span>24h 高値</span><strong id="high-price">—</strong><small>JPY</small></div>
+      <div class="metric"><span>24h 安値</span><strong id="low-price">—</strong><small>JPY</small></div>
+      <div class="metric"><span>24h 出来高</span><strong id="volume">—</strong><small id="volume-unit">BTC</small><small id="volume-jpy" class="volume-conversion" title="24h 出来高 × 現在価格。実際の24時間の約定金額合計ではありません。">日本円換算（概算）: —</small></div>
+    </section>
+    <div class="workspace">
+      <div class="market-column">
+        <section class="panel chart-panel"><div class="panel-heading"><h2>約定価格</h2><span class="muted">直近の約定 + ライブ更新</span></div><div class="chart-container"><svg id="chart" viewBox="0 0 800 180" role="img" aria-label="直近の約定価格チャート"><path id="chart-area" class="chart-area"></path><path id="chart-line" class="chart-line"></path></svg><span id="chart-empty">約定データを待っています</span></div><div class="chart-caption"><span id="chart-start">—</span><span>※ ローソク足ではなく、受信した約定価格を表示</span><span id="chart-end">—</span></div></section>
+        <div class="market-details">
+          <section class="panel book-panel"><div class="panel-heading"><h2>板情報</h2><span id="book-status" class="muted">取得待ち</span></div><div class="book-columns"><div><h3 class="sell-text">売り / ASK</h3><table><thead><tr><th>価格 (JPY)</th><th>数量</th></tr></thead><tbody id="asks"></tbody></table></div><div><h3 class="buy-text">買い / BID</h3><table><thead><tr><th>価格 (JPY)</th><th>数量</th></tr></thead><tbody id="bids"></tbody></table></div></div><p class="footnote">差分配信を反映した参考値。30 秒ごとに全体を再取得します。</p></section>
+          <section class="panel tape-panel"><div class="panel-heading"><h2>最近の約定</h2><span class="live-label">LIVE TAPE</span></div><div class="table-scroll tape-scroll"><table><thead><tr><th>時刻</th><th>価格 (JPY)</th><th>数量</th></tr></thead><tbody id="trades"></tbody></table></div></section>
+        </div>
+      </div>
+      <section class="panel order-panel"><div class="panel-heading"><h2>注文する</h2><span class="badge">実取引</span></div><form id="order-form"><fieldset id="order-fields" disabled><label for="order-type">注文方法</label><select id="order-type" name="order_type"><option value="buy">指値買い</option><option value="sell">指値売り</option><option value="market_buy">成行買い</option><option value="market_sell">成行売り</option></select><div id="rate-field"><label for="rate">指値価格 (JPY)</label><input id="rate" name="rate" inputmode="decimal" placeholder="例: 10000000" pattern="[0-9]+(\.[0-9]+)?" required></div><div id="amount-field"><label id="amount-label" for="amount">数量 (BTC)</label><input id="amount" name="amount" inputmode="decimal" placeholder="例: 0.001" pattern="[0-9]+(\.[0-9]+)?" required></div><div id="market-amount-field" hidden><label for="market-amount">購入金額 (JPY)</label><input id="market-amount" name="market_buy_amount" inputmode="decimal" placeholder="例: 10000" pattern="[0-9]+(\.[0-9]+)?" disabled></div><details><summary>詳細設定</summary><label for="stop-loss">逆指値レート (JPY・任意)</label><input id="stop-loss" name="stop_loss_rate" inputmode="decimal" pattern="[0-9]+(\.[0-9]+)?"><label id="post-only-label" class="check-label"><input id="post-only" type="checkbox">Post only（指値のみ）</label></details><div class="order-estimate"><span>概算金額</span><strong id="estimate">—</strong></div><button type="submit" class="primary-button" id="review-order">注文内容を確認</button><p class="footnote">手数料は概算に含みません。成行注文の約定価格は変動します。</p></fieldset></form><p id="order-help" class="footnote">API キーを設定すると取引できます。</p></section>
+    </div>
+    <section class="panel open-orders"><div class="panel-heading"><h2>未約定注文 <span id="order-count" class="count">0</span></h2><span id="orders-status" class="muted">API キー未設定</span></div><div class="table-scroll"><table><thead><tr><th>注文 ID</th><th>通貨ペア</th><th>種類</th><th>価格</th><th>未約定数量</th><th>操作</th></tr></thead><tbody id="orders"><tr><td colspan="6" class="empty">API キーを設定すると表示されます</td></tr></tbody></table></div></section>
+    <section class="panel history-panel"><div class="panel-heading"><h2>自分の約定履歴</h2><span id="history-status" class="muted">全通貨ペア</span></div><div class="table-scroll history-scroll"><table><thead><tr><th>日時</th><th>通貨ペア</th><th>種類</th><th>価格</th><th>増減</th></tr></thead><tbody id="history"><tr><td colspan="5" class="empty">API キーを設定すると表示されます</td></tr></tbody></table></div><button id="more-history" class="quiet more-button" hidden>さらに読み込む</button></section>
+    <section class="panel events-panel"><div class="panel-heading"><h2>注文・約定イベント</h2><span class="muted">この画面を開いている間の通知</span></div><ol id="events"><li class="muted">イベントはまだありません</li></ol></section>
+    <footer><span>Coincheck LOCAL</span><span>WebSocket でリアルタイム更新 · 残高・履歴は 30 秒ごとにも確認</span></footer>
+  </main>
+  <dialog id="confirm-dialog"><form method="dialog"><p class="eyebrow">ORDER REVIEW</p><h2 id="confirm-title">注文内容の確認</h2><pre id="confirm-body"></pre><p class="footnote">確定すると Coincheck に送信され、実際の取引に反映されます。</p><div class="dialog-actions"><button value="cancel" class="quiet">戻る</button><button value="confirm" class="primary-button">確定して送信</button></div></form></dialog>
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <p class="eyebrow">ACCOUNT CONNECTION</p><h2 id="settings-title">API キー設定</h2>
+    <p id="credentials-state" class="muted">未登録</p>
+    <form id="credentials-form" autocomplete="off">
+      <fieldset id="credentials-fields">
+        <label for="api-key">API キー</label><input id="api-key" type="password" autocomplete="off" spellcheck="false" autocapitalize="none" maxlength="512" required>
+        <label for="api-secret">シークレットキー</label><input id="api-secret" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" maxlength="512" required>
+        <p class="footnote">キーはこのサーバーのメモリ内だけで保持し、再起動すると消えます。登録時に残高参照で接続を確認します。</p>
+        <p class="footnote">Coincheck 側で残高・注文・取引履歴と、WebSocket の注文・約定イベントの権限を設定してください。</p>
+        <div class="dialog-actions"><button type="button" id="close-settings" class="quiet">閉じる</button><button type="submit" class="primary-button">接続を確認して登録</button></div>
+        <button type="button" id="clear-credentials" class="quiet" hidden>登録を解除</button>
+      </fieldset>
+    </form>
+    <p id="credentials-result" class="footnote" role="status" aria-live="polite"></p>
+  </dialog>
+</body>
+</html>

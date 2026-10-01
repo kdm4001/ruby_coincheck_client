@@ -1,0 +1,31 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "bundler/setup"
+require "puma"
+require "io/console"
+require_relative "../gui/app"
+
+port = Integer(ENV.fetch("PORT", "9292"))
+abort "PORT must be between 1024 and 65535" unless (1024..65_535).cover?(port)
+password = ENV.delete("COINCHECK_GUI_PASSWORD")&.dup
+unless password
+  abort "ターミナルから起動して GUI パスワードを入力してください。" unless IO.console
+  password = IO.console.getpass("GUI 専用パスワード（12文字以上）: ")
+  confirmation = IO.console.getpass("もう一度入力: ")
+  abort "パスワードが一致しません" unless password == confirmation
+  confirmation.clear
+end
+begin
+  app = RubyCoincheckClient::GUI::App.new(port: port, login_password: password)
+rescue ArgumentError => error
+  abort error.message
+ensure
+  password&.clear # Best effort; Ruby does not guarantee secure memory erasure.
+end
+Faye::WebSocket.ensure_reactor_running
+server = Puma::Server.new(app)
+server.add_tcp_listener("127.0.0.1", port)
+puts "Coincheck Local: http://127.0.0.1:#{port} (Ctrl+C to stop)"
+%w[INT TERM].each { |signal| Signal.trap(signal) { Thread.new { server.stop(true); EventMachine.stop } } }
+server.run.join

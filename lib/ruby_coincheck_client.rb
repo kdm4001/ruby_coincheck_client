@@ -4,3 +4,7 @@ require_relative "ruby_coincheck_client/version"
 require_relative "ruby_coincheck_client/errors"
 require_relative "ruby_coincheck_client/client"
 require_relative "ruby_coincheck_client/coincheck_client"
+
+module RubyCoincheckClient
+  autoload :WebSocket, File.expand_path("ruby_coincheck_client/websocket", __dir__)
+end

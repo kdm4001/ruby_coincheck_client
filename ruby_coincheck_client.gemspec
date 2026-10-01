@@ -7,7 +7,7 @@ require "ruby_coincheck_client/version"
 Gem::Specification.new do |spec|
   spec.name = "ruby_coincheck_client"
   spec.version = RubyCoincheckClient::VERSION
-  spec.authors = ["coincheck"]
+  spec.authors = ["Coincheck"]
   spec.email = ["info@coincheck.jp"]
 
   spec.summary = "A Ruby client for the Coincheck Exchange API"
@@ -22,6 +22,8 @@ Gem::Specification.new do |spec|
 
   spec.files = Dir["lib/**/*.rb", "README.md", "CHANGELOG.md"]
   spec.require_paths = ["lib"]
+
+  spec.add_dependency "faye-websocket", "~> 0.12"
 
   spec.add_development_dependency "bundler", ">= 2.4", "< 5"
   spec.add_development_dependency "rake", "~> 13.0"

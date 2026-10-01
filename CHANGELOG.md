@@ -1,3 +1,11 @@
+# Unreleased
+
+* Required a separate local GUI password, with hashed in-memory verification, expiring HttpOnly sessions, login throttling, logout, and authentication on all API/WebSocket routes.
+
+* Added a localhost-only Japanese trading dashboard with market data, balances, open orders, paginated execution history, order placement and cancellation.
+* Added public and private WebSocket subscriptions, shared REST/WebSocket nonce signing, reconnects, and live dashboard updates.
+* Added local origin/token protection, order confirmation, duplicate-write protection, and tests for the dashboard and streaming lifecycle.
+
 # 0.4.0
 
 * Rebuilt the HTTP layer with TLS verification, timeouts, parsed responses, and structured errors.

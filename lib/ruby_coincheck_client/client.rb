@@ -18,6 +18,18 @@ module RubyCoincheckClient
 
     attr_reader :base_url
 
+    # Use the same client for REST and WebSocket authentication so nonces share
+    # one sequence. Never forward this payload to a browser or write it to logs.
+    def websocket_login
+      headers = authentication_headers("wss://stream.coincheck.com/private", "")
+      {
+        type: "login",
+        access_key: headers.fetch("ACCESS-KEY"),
+        access_nonce: headers.fetch("ACCESS-NONCE"),
+        access_signature: headers.fetch("ACCESS-SIGNATURE")
+      }
+    end
+
     def initialize(
       key = nil,
       secret = nil,

@@ -1,0 +1,49 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Runs an isolated local HTTP integration check with a random test password.
+# Does not use real Coincheck credentials or make external API requests.
+require "bundler/setup"
+require "puma"
+require "net/http"
+require "json"
+require "socket"
+require_relative "../gui/app"
+
+def check(condition, description)
+  abort "FAIL #{description}" unless condition
+  puts "OK #{description}"
+end
+
+listener = TCPServer.new("127.0.0.1", 0)
+port = listener.addr[1]
+password = SecureRandom.hex(24)
+origin = "http://127.0.0.1:#{port}"
+app = RubyCoincheckClient::GUI::App.new(login_password: password, port: port, authenticated: false, client: Object.new)
+server = Puma::Server.new(app)
+server.binder.inherit_tcp_listener("127.0.0.1", port, listener)
+server.run
+
+begin
+  http = Net::HTTP.new("127.0.0.1", port)
+  http.open_timeout = 5
+  http.read_timeout = 5
+  response = http.get("/api/session")
+  check(response.code == "401" && !JSON.parse(response.body).key?("token"), "unauthenticated session endpoint does not disclose a token")
+  check(http.get("/").body.include?('id="login-form"'), "anonymous browser receives the login page")
+  response = http.post("/api/login", JSON.generate(password: password), "Content-Type" => "application/json", "Origin" => origin)
+  check(response.code == "200", "password login succeeds over HTTP")
+  cookie = response["set-cookie"]
+  check(cookie.include?("httponly") && cookie.include?("samesite=strict"), "login cookie has HttpOnly and SameSite attributes")
+  cookie = cookie.split(";").first
+  response = http.get("/api/session", "Cookie" => cookie)
+  check(response.code == "200", "authenticated session endpoint is accessible")
+  token = JSON.parse(response.body).fetch("token")
+  check(http.get("/api/session", "X-Local-Token" => token).code == "401", "a stolen action token alone is insufficient")
+  headers = { "Cookie" => cookie, "X-Local-Token" => token, "Origin" => origin, "Content-Type" => "application/json" }
+  check(http.post("/api/logout", "{}", headers).code == "200", "logout succeeds")
+  check(http.get("/api/session", headers).code == "401", "logged-out cookie and token cannot be reused")
+ensure
+  password.clear
+  server.stop(true)
+end

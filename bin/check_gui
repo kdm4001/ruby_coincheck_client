@@ -1,0 +1,57 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Read-only smoke check against an already running local dashboard.
+require "bundler/setup"
+require "json"
+require "net/http"
+require "faye/websocket"
+require "io/console"
+
+port = Integer(ENV.fetch("PORT", "9292"))
+origin = "http://127.0.0.1:#{port}"
+pair = ARGV.fetch(0, "btc_jpy")
+abort "Pair must be btc_jpy, eth_jpy, xrp_jpy or sol_jpy" unless %w[btc_jpy eth_jpy xrp_jpy sol_jpy].include?(pair)
+password = ENV.delete("COINCHECK_GUI_PASSWORD")&.dup || IO.console&.getpass("GUI パスワード: ")
+abort "ターミナルから実行し、GUI パスワードを入力してください" unless password
+login = Net::HTTP.post(URI("#{origin}/api/login"), JSON.generate(password: password), "Content-Type" => "application/json", "Origin" => origin)
+password.clear
+abort "GUI login failed: HTTP #{login.code}" unless login.code == "200"
+cookie = login["set-cookie"].split(";").first
+session_request = Net::HTTP::Get.new("/api/session", "Cookie" => cookie)
+session_response = Net::HTTP.start("127.0.0.1", port) { |http| http.request(session_request) }
+session = JSON.parse(session_response.body)
+paths = %w[/ /app.js /market.js /style.css] + %w[ticker book trades].map { |name| "/api/#{name}?pair=#{pair}" }
+paths.each do |path|
+  uri = URI("#{origin}#{path}")
+  response = Net::HTTP.start(uri.host, uri.port, read_timeout: 20) do |http|
+    http.get(uri.request_uri, "X-Local-Token" => session.fetch("token"), "Cookie" => cookie)
+  end
+  abort "FAIL #{path}: HTTP #{response.code}" unless response.code == "200"
+  puts "OK #{path}"
+end
+
+received = false
+EventMachine.run do
+  socket = Faye::WebSocket::Client.new(
+    "ws://127.0.0.1:#{port}/stream?pair=#{pair}",
+    ["coincheck-local", session.fetch("token")], headers: { "Origin" => origin, "Cookie" => cookie }
+  )
+  timeout = EventMachine.add_timer(30) { socket.close; EventMachine.stop }
+  socket.on(:message) do |event|
+    message = JSON.parse(event.data)
+    next unless message["source"] == "public"
+    if message["type"] == "status"
+      puts "Public WebSocket: #{message.dig('data', 'state')}"
+    elsif message["type"] == "message" && message["data"].is_a?(Array) &&
+          (message["data"][0] == pair || message["data"].any? { |item| item.is_a?(Array) && item[2] == pair })
+      received = true
+      puts "OK #{pair} market data received over local WebSocket"
+      EventMachine.cancel_timer(timeout)
+      socket.close
+      EventMachine.stop
+    end
+  end
+end
+Net::HTTP.post(URI("#{origin}/api/logout"), "{}", "Content-Type" => "application/json", "Origin" => origin, "Cookie" => cookie, "X-Local-Token" => session.fetch("token"))
+abort "FAIL no public WebSocket data received within 30 seconds" unless received

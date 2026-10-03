@@ -156,6 +156,171 @@ RSpec.describe RubyCoincheckClient::GUI::App do
     end
   end
 
+  describe "emulated immediate-or-cancel orders" do
+    let(:path) { "/api/orders/immediate_or_cancel" }
+    let(:result_path) { "#{path}/#{order.fetch(:request_id)}" }
+    let(:detail) do
+      { "id" => 42, "pair" => "btc_jpy", "order_type" => "buy", "amount" => "0.001",
+        "status" => "PARTIALLY_FILLED_CANCELED", "executed_amount" => "0.0004", "expired_amount" => "0" }
+    end
+
+    def accept_ioc
+      allow(client).to receive(:create_order).and_return("id" => 42)
+      allow(client).to receive(:cancel_order).with(id: "42").and_return("success" => true, "id" => 42)
+      allow(client).to receive(:order).with(id: "42").and_return(detail)
+    end
+
+    it "submits once, cancels once, and replays the result without additional writes" do
+      accept_ioc
+      first = submit(path: path)
+      expect(first.status).to eq(200)
+      expect(JSON.parse(first.body)).to include("status" => "canceled", "executed_amount" => "0.0004", "canceled_amount" => "0.0006")
+      expect(submit(path: path).body).to eq(first.body)
+      expect(request.get(result_path, headers).body).to eq(first.body)
+      expect(client).to have_received(:create_order).once
+      expect(client).to have_received(:cancel_order).once
+      expect(client).to have_received(:order).once
+      expect(submit(order.merge(amount: "0.002"), path: path).status).to eq(409)
+      expect(submit.status).to eq(409)
+    end
+
+    it "supports sell orders without forwarding an unsupported time_in_force" do
+      accept_ioc
+      detail["order_type"] = "sell"
+      expect(client).to receive(:create_order).with(pair: "btc_jpy", order_type: "sell", rate: "10000000", amount: "0.001").once.and_return("id" => 42)
+      expect(submit(order.merge(order_type: "sell"), path: path).status).to eq(200)
+    end
+
+    it "validates IOC-only parameters before any exchange write" do
+      expect(client).not_to receive(:create_order)
+      [order.merge(order_type: "market_buy", market_buy_amount: "1000"),
+       order.merge(order_type: "market_sell"), order.merge(time_in_force: "post_only"),
+       order.merge(stop_loss_rate: "100"), order.merge(amount: "0"),
+       order.reject { |key, _| key == :rate }].each do |body|
+        expect(submit(body, path: path).status).to eq(400)
+      end
+    end
+
+    it "keeps a lost create response uncertain and never resubmits on replay or lookup" do
+      expect(client).to receive(:create_order).once.and_raise(Net::ReadTimeout)
+      expect(client).not_to receive(:cancel_order)
+      first = submit(path: path)
+      expect(first.status).to eq(202)
+      expect(JSON.parse(first.body)).to include("status" => "unknown", "order_id" => nil)
+      expect(submit(path: path).body).to eq(first.body)
+      expect(request.get(result_path, headers).body).to eq(first.body)
+    end
+
+    it "reconciles a pending result using GET without sending another order or cancel" do
+      accept_ioc
+      allow(client).to receive(:order).and_raise(Net::ReadTimeout)
+      expect(submit(path: path).status).to eq(202)
+      allow(client).to receive(:order).and_return(detail)
+      expect(request.get(result_path, headers).status).to eq(200)
+      expect(client).to have_received(:create_order).once
+      expect(client).to have_received(:cancel_order).once
+    end
+
+    it "enforces login, local origin and token checks before trading or reading results" do
+      expect(client).not_to receive(:create_order)
+      expect(submit(path: path, extra: { "HTTP_COOKIE" => nil }).status).to eq(401)
+      expect(submit(path: path, extra: { "HTTP_X_LOCAL_TOKEN" => nil }).status).to eq(403)
+      expect(submit(path: path, extra: { "HTTP_ORIGIN" => "https://evil.example" }).status).to eq(403)
+      expect(request.get(result_path, bare_host).status).to eq(401)
+      expect(request.get(result_path, host).status).to eq(403)
+      expect(request.get(result_path, headers).status).to eq(404)
+    end
+
+    it "does not expose a previous connection's result after credentials are replaced" do
+      accept_ioc
+      expect(submit(path: path).status).to eq(200)
+      stub_request(:get, "https://coincheck.com/api/accounts/balance").to_return(body: '{"jpy":"1000"}')
+      result = submit({ api_key: "another-key", api_secret: "another-secret" }, path: "/api/credentials")
+      fresh_headers = headers.merge("HTTP_X_LOCAL_TOKEN" => JSON.parse(result.body).fetch("token"))
+      expect(request.get(result_path, fresh_headers).status).to eq(404)
+      expect(request.post(path, fresh_headers.merge(input: JSON.generate(order))).status).to eq(409)
+    end
+  end
+
+  describe "good-til-date orders" do
+    let(:now) { [Time.utc(2026, 10, 3)] }
+    let(:app) { described_class.new(login_password: password, client: client, authenticated: true, wall_clock: -> { now.first }) }
+    let(:path) { "/api/orders/good_til_date" }
+    let(:gtd_order) { order.merge(expires_at: (now.first + 10).iso8601) }
+    let(:result_path) { "#{path}/#{order.fetch(:request_id)}" }
+    let(:cancellations) { Queue.new }
+    let(:detail) do
+      { "id" => 42, "pair" => "btc_jpy", "order_type" => "buy", "amount" => "0.001",
+        "status" => "CANCELED", "executed_amount" => "0", "expired_amount" => "0" }
+    end
+
+    before do
+      allow(client).to receive(:balance).and_return("jpy" => "0")
+      allow(client).to receive(:create_order).and_return("id" => 42)
+      allow(client).to receive(:cancel_order) do
+        cancellations << true
+        { "success" => true, "id" => 42 }
+      end
+      allow(client).to receive(:order).and_return(detail)
+      headers
+      app.start_monitoring
+    end
+
+    after { app.stop_monitoring }
+
+    it "keeps the order until its deadline and cancels without a browser request" do
+      body = gtd_order
+      first = submit(body, path: path)
+      expect(first.status).to eq(202)
+      expect(JSON.parse(first.body)).to include("status" => "open", "requires_attention" => false)
+      expect(submit(body, path: path).body).to eq(first.body)
+      expect(client).not_to have_received(:cancel_order)
+      now[0] += 11
+      Timeout.timeout(4) { cancellations.pop }
+      response = request.get(result_path, headers)
+      expect(response.status).to eq(200)
+      expect(JSON.parse(response.body)).to include("status" => "canceled", "canceled_amount" => "0.001")
+      expect(client).to have_received(:create_order).once
+      expect(client).to have_received(:cancel_order).once
+    end
+
+    it "rejects invalid deadlines and incompatible order types before submission" do
+      ["yesterday", "2026-10-03T00:00:10", now.first.iso8601, (now.first + 8 * 86_400).iso8601].each do |expiry|
+        expect(submit(gtd_order.merge(expires_at: expiry), path: path).status).to eq(400)
+      end
+      expect(submit(gtd_order.merge(order_type: "market_sell"), path: path).status).to eq(400)
+      expect(submit(gtd_order.merge(stop_loss_rate: "10"), path: path).status).to eq(400)
+      expect(client).not_to have_received(:create_order)
+    end
+
+    it "blocks credential replacement until a pending order is confirmed terminal" do
+      expect(submit(gtd_order, path: path).status).to eq(202)
+      expect(submit({}, path: "/api/credentials/clear").status).to eq(409)
+      expect(request.get(result_path, headers).status).to eq(200)
+      expect(submit({}, path: "/api/credentials/clear").status).to eq(200)
+    end
+
+    it "does not send an order when deadline monitoring is stopped" do
+      app.stop_monitoring
+      expect(submit(gtd_order, path: path).status).to eq(503)
+      expect(client).not_to have_received(:create_order)
+    end
+
+    it "retries cancellation after 30 seconds without resubmitting" do
+      detail["status"] = "NEW"
+      expect(submit(gtd_order, path: path).status).to eq(202)
+      now[0] += 11
+      Timeout.timeout(4) { cancellations.pop }
+      expect(request.get(result_path, headers).status).to eq(202)
+      now[0] += 31
+      detail["status"] = "CANCELED"
+      Timeout.timeout(4) { cancellations.pop }
+      expect(request.get(result_path, headers).status).to eq(200)
+      expect(client).to have_received(:create_order).once
+      expect(client).to have_received(:cancel_order).twice
+    end
+  end
+
   describe "credential registration" do
     let(:credentials) { { api_key: "new-key", api_secret: "new-secret" } }
 

@@ -6,6 +6,7 @@ require "bigdecimal"
 require_relative "auth"
 require_relative "portfolio"
 require_relative "portfolio_history"
+require_relative "immediate_or_cancel"
 require_relative "../lib/ruby_coincheck_client"
 require_relative "../lib/ruby_coincheck_client/websocket"
 
@@ -30,7 +31,7 @@ module RubyCoincheckClient
       }.freeze
 
       def initialize(login_password:, port: 9292, client: nil, authenticated: nil, session_seconds: Auth::SESSION_SECONDS,
-                     history_directory: nil,
+                     history_directory: nil, wall_clock: -> { Time.now },
                      clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
         @auth = Auth.new(login_password, session_seconds: session_seconds, clock: clock)
         @portfolio = Portfolio.new
@@ -47,6 +48,7 @@ module RubyCoincheckClient
         @token = SecureRandom.hex(32)
         @api_mutex = Mutex.new
         @writes = {}
+        @wall_clock = wall_clock
         @sockets = {} # Accessed only on the EventMachine reactor.
       end
 
@@ -58,14 +60,19 @@ module RubyCoincheckClient
         @monitor_thread = Thread.new do
           loop do
             @api_mutex.synchronize do
+              process_gtd
               begin
-                portfolio_snapshot if @authenticated
+                now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                if @authenticated && (!@last_portfolio_sample || now - @last_portfolio_sample >= 60)
+                  @last_portfolio_sample = now
+                  portfolio_snapshot
+                end
               rescue StandardError
                 @history_error = "資産の取得に失敗しました。次回の自動取得を待っています。"
               end
             end
             running = @monitor_mutex.synchronize do
-              @monitor_condition.wait(@monitor_mutex, 60) if @monitoring
+              @monitor_condition.wait(@monitor_mutex, 1) if @monitoring
               @monitoring
             end
             break unless running
@@ -161,6 +168,9 @@ module RubyCoincheckClient
       end
 
       def route(request)
+        if request.post? && %w[/api/credentials /api/credentials/clear].include?(request.path) && pending_gtd?
+          return json(409, error: "未完了のGTD注文があります。キャンセル後にGTD結果を照会して完了を確認してからAPIキーを変更してください。")
+        end
         if request.post? && request.path == "/api/credentials"
           return register_credentials(request)
         end
@@ -177,6 +187,13 @@ module RubyCoincheckClient
           end
         end
         return json(401, error: "画面右上の「API キー設定」から登録してください") unless @authenticated
+
+        if request.get? && %r{\A/api/orders/immediate_or_cancel/[\w-]{16,80}\z}.match?(request.path)
+          return ioc_result(request.path.split("/").last)
+        end
+        if request.get? && %r{\A/api/orders/good_til_date/[\w-]{16,80}\z}.match?(request.path)
+          return gtd_result(request.path.split("/").last)
+        end
 
         if request.get?
           case request.path
@@ -198,7 +215,7 @@ module RubyCoincheckClient
           end
         end
 
-        if request.post? && (request.path == "/api/orders" || %r{\A/api/orders/\d+/cancel\z}.match?(request.path))
+        if request.post? && (["/api/orders", "/api/orders/immediate_or_cancel", "/api/orders/good_til_date"].include?(request.path) || %r{\A/api/orders/\d+/cancel\z}.match?(request.path))
           return mutate(request)
         end
         json(404, error: "見つかりません")
@@ -284,6 +301,34 @@ module RubyCoincheckClient
         end
         return json(429, error: "操作数の上限です。サーバーを再起動してください") if @writes.size >= 1000
 
+        if request.path == "/api/orders/good_til_date"
+          raise ArgumentError unless (body.keys - %w[request_id pair order_type rate amount expires_at]).empty?
+          text = body.fetch("expires_at")
+          raise ArgumentError unless text.is_a?(String) && /(?:Z|[+-]\d{2}:\d{2})\z/.match?(text)
+          deadline = Time.iso8601(text)
+          now = @wall_clock.call
+          raise ArgumentError unless deadline > now && deadline <= now + 7 * 86_400
+          params = order_params(body.reject { |key, _| key == "expires_at" })
+          raise ArgumentError unless %w[buy sell].include?(params[:order_type])
+          return json(503, error: "GTDの期限監視が起動していません") unless @monitor_thread&.alive?
+
+          result = ioc_executor.submit(params, request_id: id).merge(mode: "emulated_good_til_date", expires_at: deadline.utc.iso8601(6))
+          result[:requires_attention] = result[:uncertain]
+          response = ioc_response(result)
+          @writes[id] = { fingerprint: fingerprint, response: response, gtd: result, next_cancel_at: deadline }
+          return response
+        end
+
+        if request.path == "/api/orders/immediate_or_cancel"
+          raise ArgumentError unless (body.keys - %w[request_id pair order_type rate amount]).empty?
+          params = order_params(body)
+          raise ArgumentError unless %w[buy sell].include?(params[:order_type])
+          result = ioc_executor.call(params, request_id: id)
+          response = ioc_response(result)
+          @writes[id] = { fingerprint: fingerprint, response: response, ioc: result }
+          return response
+        end
+
         params = order_params(body) if request.path == "/api/orders"
         result = begin
           response = if params
@@ -331,6 +376,54 @@ module RubyCoincheckClient
         raise ArgumentError if invalid.any? { |key| params.key?(key) }
         raise ArgumentError if params[:time_in_force] && (params[:time_in_force] != "post_only" || !%w[buy sell].include?(params[:order_type]))
         params
+      end
+
+      def ioc_executor
+        ImmediateOrCancel.new(@client, before_lookup: lambda {
+          # Coincheck limits order-detail reads to one request per second.
+          now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          delay = (@last_ioc_lookup || now - 1.05) + 1.05 - now
+          sleep(delay) if delay.positive?
+          @last_ioc_lookup = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        })
+      end
+
+      def pending_gtd?
+        @writes.values.any? { |saved| saved[:gtd] && !saved[:gtd][:terminal] && saved[:gtd][:order_id] }
+      end
+
+      def process_gtd
+        now = @wall_clock.call
+        # One due order per tick keeps other API operations responsive. Failed
+        # cancellations are retried after 30 seconds; submissions are never retried.
+        saved = @writes.values.find do |entry|
+          entry[:gtd] && !entry[:gtd][:terminal] && entry[:gtd][:order_id] && entry[:next_cancel_at] <= now
+        end
+        return unless saved
+        saved[:gtd] = ioc_executor.cancel(saved[:gtd])
+        saved[:next_cancel_at] = @wall_clock.call + 30
+        saved[:response] = ioc_response(saved[:gtd])
+      end
+
+      def gtd_result(id)
+        saved = @writes[id]
+        return json(404, error: "この接続でのGTD記録がありません") unless saved && saved[:gtd] && saved[:fingerprint].first == @token
+        result = ioc_executor.refresh(saved[:gtd])
+        result[:requires_attention] = !result[:terminal] && (result[:uncertain] || @wall_clock.call >= Time.iso8601(result[:expires_at]))
+        saved[:gtd] = result
+        saved[:response] = ioc_response(result)
+      end
+
+      def ioc_response(result)
+        code = result[:status] == "rejected" ? 422 : result[:terminal] ? 200 : 202
+        json(code, result)
+      end
+
+      def ioc_result(id)
+        saved = @writes[id]
+        return json(404, error: "この接続での擬似IOC記録がありません") unless saved && saved[:ioc] && saved[:fingerprint].first == @token
+        saved[:ioc] = ioc_executor.refresh(saved[:ioc])
+        saved[:response] = ioc_response(saved[:ioc])
       end
 
       def stream(env, selected_pair, stream_token, login_id)

@@ -222,6 +222,97 @@ bundle exec ruby bin/check_gui xrp_jpy
 bundle exec ruby bin/check_gui sol_jpy
 ```
 
+### ローカルの擬似IOCエンドポイント
+
+`POST /api/orders/immediate_or_cancel` は指値注文を1回送信し、注文IDを受け取った直後にキャンセルを1回要求して、注文詳細から結果を確認します。対象は `buy` / `sell` です。GUIの注文フォームにはまだ追加していません。
+
+これは取引所ネイティブのIOCではありません。注文からキャンセルまでの間も約定し得ます。通信障害・キャンセル拒否・サーバー停止時には注文が残る可能性があり、即時取消を保証しません。[Coincheck公式の注文・キャンセル・注文詳細API](https://coincheck.com/ja/documents/exchange/api)を組み合わせています。
+
+通常のGUI APIと同じく、GUIログインのCookieと `/api/session` で取得する `token` を `X-Local-Token` ヘッダーに指定し、`Content-Type: application/json` を付けます。`Origin` を送る場合はローカルGUIのURLと一致させてください。CoincheckのAPIキーには新規注文・キャンセル・注文詳細の権限が必要です。
+
+リクエスト例（送信すると実際に発注します）:
+
+```json
+{
+  "request_id": "ioc-example-00000001",
+  "pair": "btc_jpy",
+  "order_type": "buy",
+  "rate": "10000000",
+  "amount": "0.001"
+}
+```
+
+`request_id` は英数字・アンダースコア・ハイフンの16〜80文字で、注文ごとに一意にしてください。数値は正の十進文字列で指定します。成行注文、`stop_loss_rate`、`time_in_force`、その他の余分なフィールドは拒否します。
+
+部分約定後にキャンセルできた場合のレスポンス例:
+
+```json
+{
+  "request_id": "ioc-example-00000001",
+  "mode": "emulated_immediate_or_cancel",
+  "pair": "btc_jpy",
+  "order_type": "buy",
+  "requested_amount": "0.001",
+  "rate": "10000000",
+  "order_id": "42",
+  "status": "canceled",
+  "cancel_request": "accepted",
+  "executed_amount": "0.0004",
+  "remaining_amount": "0.0",
+  "canceled_amount": "0.0006",
+  "expired_amount": "0.0",
+  "terminal": true,
+  "uncertain": false,
+  "requires_attention": false,
+  "exchange_status": "PARTIALLY_FILLED_CANCELED",
+  "checked_at": "2026-10-03T00:00:00Z"
+}
+```
+
+| `status` | 意味 | HTTP |
+| --- | --- | --- |
+| `filled` | 全量約定済み | 200 |
+| `canceled` | キャンセル済み。一部約定している場合もあります | 200 |
+| `expired` | 失効済み。一部約定している場合もあります | 200 |
+| `rejected` | 新規注文が明確に拒否された | 422 |
+| `open` | 確認時点で未約定分が残っている | 202 |
+| `unknown` | 注文の受理または最終状態を確認できない | 202 |
+
+`cancel_request` は取消要求への応答（`accepted` / `rejected` / `unknown` / `not_sent`）であり、注文の最終状態ではありません。数量を確認できない場合はゼロではなく `null` を返します。`terminal: false` / `requires_attention: true` の場合は、注文が残っていないか確認が必要です。
+
+`GET /api/orders/immediate_or_cancel/{request_id}` で結果を照会できます。未確定で注文IDが判明している場合だけ、注文詳細を再取得します。GETは発注・キャンセルを行いません。注文詳細の取得はこのサーバー内で約1秒以上の間隔を空けます。他のクライアントとのレート制限調整は行いません。
+
+POSTは処理完了まで待つ同期APIです。クライアントがタイムアウトしたりブラウザを閉じたりしても、サーバープロセスが動作している限り処理を続けます。同じ `request_id`・同じ本文で再POSTすると保存済み結果を返し、新しい注文は送信しません。異なる本文・別の注文エンドポイントで同じIDを使用すると409を返します。最新状態を確認したい場合はGETを使ってください。
+
+HTTP 202は自動再試行を予約した意味ではありません。自動で発注・取消を繰り返すことはありません。新規注文の応答が失われて注文IDを特定できない場合、別の注文を誤って取り消さないよう推測でキャンセルせず、`unknown` を返します。Coincheckの注文・約定履歴で確認してください。
+
+重複防止と結果の記録はサーバーのメモリ内のみです。再起動後は同じIDでも新規発注になり得るため、未確定のリクエストを再起動後に再送しないでください。APIキーの変更・解除後は以前の接続の結果を照会できません。同じプロセス内では以前使ったIDの再利用も拒否します。
+
+### ローカルの期限付き注文（GTD）
+
+`POST /api/orders/good_til_date` で指値注文と取消期限を登録します。認証は上記の擬似IOCと同じです。対応フィールドは `request_id`、`pair`、`order_type`（`buy` / `sell`）、`rate`、`amount`、`expires_at` のみです。
+
+```json
+{
+  "request_id": "gtd-example-00000001",
+  "pair": "btc_jpy",
+  "order_type": "buy",
+  "rate": "10000000",
+  "amount": "0.001",
+  "expires_at": "2026-10-04T18:00:00+09:00"
+}
+```
+
+`expires_at` はタイムゾーン付きISO 8601で、送信時点より未来かつ7日以内を指定します。上の日時は例なので、実行時に置き換えてください。POSTすると実際に発注します。受付時はHTTP 202、`mode: emulated_good_til_date` と期限を返します。結果フィールドは擬似IOCと共通です。
+
+サーバーは約1秒間隔で期限を確認し、期限切れの注文の未約定分を取り消します。部分約定した分は取り消せません。取消後に注文詳細を確認し、未完了・確認不能なら30秒以上空けて取消を再試行します。新規発注は再試行しません。複数注文は順に処理するため、通信処理やAPI制限などで期限から遅れる可能性があります。
+
+`GET /api/orders/good_til_date/{request_id}` は注文詳細を読み取って結果を更新します。照会自体では発注・取消を行いません。期限前の正常な未約定注文は `requires_attention: false`、期限後に未完了または確認不能なら `true` です。同じID・同じ本文のPOSTは保存結果を返し、二重発注しません。
+
+ブラウザを閉じてもログアウトしても監視は続きますが、**サーバーの停止・PCのスリープ中は取消できず、再起動後の予約復元もありません**。停止前に未約定注文を取り消し、結果を確認してください。新規注文の応答が失われてIDが不明な場合も自動取消できません。取引所側に期限は設定されません。GTDの記録・重複防止はメモリ内のみです。
+
+取消対象のアカウントを維持するため、注文IDが判明している未完了GTDがある間はAPIキーの変更・解除を409で拒否します。手動取消・全約定後はGTD結果をGETで照会して完了を確認すると解除できます。GUIの注文フォームへの追加と永続化は今回の対象外です。
+
 ### 自宅で常時表示する
 
 初期表示はダッシュボードです。主要4通貨の価格・24時間高安値、総資産、資産推移をまとめて表示します。通貨カードを押すと詳細チャートの対象も切り替わります。「取引デスクへ」で注文・板・履歴を含む画面に戻れます。表示モードはこのブラウザに保存します。

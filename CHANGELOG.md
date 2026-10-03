@@ -1,5 +1,9 @@
 # Unreleased
 
+* Added local GTD limit orders with deadline monitoring, cancellation retries, result lookup, and protection against changing credentials while orders remain pending.
+
+* Added authenticated local emulated-IOC submission and read-only result lookup, with immediate cancellation, explicit uncertain outcomes, and process-local duplicate protection.
+
 * Added a home dashboard with a four-pair watchlist, quote freshness, fullscreen and optional screen wake lock.
 * Added server-side five-minute portfolio history with local persistence, account isolation, thirty-day retention and period charts.
 * Made GUI login duration configurable from one to 168 hours (eight hours by default).

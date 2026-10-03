@@ -181,3 +181,10 @@ body:not([data-theme="dark"]) .metric.primary,body:not([data-theme="dark"]) .ord
   body[data-view="dashboard"] .portfolio-panel th{padding:12px}
 }
 #asset-chart-dot[hidden]{display:none}
+#order-policy,#order-expiry{margin-bottom:16px}
+#managed-orders-panel{margin-top:24px}
+#managed-orders-panel>.footnote{padding:0 22px}
+.managed-order{padding:18px 22px;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.managed-order p{line-height:1.7;font-size:12px}
+.managed-order .muted{font-size:11px}
+#confirm-body{white-space:pre-wrap;overflow-wrap:anywhere}

@@ -1,5 +1,7 @@
 # Unreleased
 
+* Added GUI selectors for IOC and GTD, local-time deadlines, confirmation details, and read-only result tracking.
+
 * Added local GTD limit orders with deadline monitoring, cancellation retries, result lookup, and protection against changing credentials while orders remain pending.
 
 * Added authenticated local emulated-IOC submission and read-only result lookup, with immediate cancellation, explicit uncertain outcomes, and process-local duplicate protection.

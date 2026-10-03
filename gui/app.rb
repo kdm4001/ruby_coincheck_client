@@ -18,6 +18,7 @@ module RubyCoincheckClient
         "/login" => ["login.html", "text/html; charset=utf-8"],
         "/login.js" => ["login.js", "text/javascript; charset=utf-8"],
         "/app.js" => ["app.js", "text/javascript; charset=utf-8"],
+        "/order-policy.js" => ["order-policy.js", "text/javascript; charset=utf-8"],
         "/dashboard.js" => ["dashboard.js", "text/javascript; charset=utf-8"],
         "/asset-history.js" => ["asset-history.js", "text/javascript; charset=utf-8"],
         "/market.js" => ["market.js", "text/javascript; charset=utf-8"],

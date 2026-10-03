@@ -1,4 +1,5 @@
 import { setupAssetHistory } from './asset-history.js';
+import { prepareOrder, policyLabels, resultText } from './order-policy.js';
 import { setupDashboard } from './dashboard.js';
 import { OrderBook, parseTrades, mergeTrades } from './market.js';
 
@@ -13,6 +14,7 @@ let privateTimer, publicLive = false;
 let volume24h = null;
 let settingsSaving = false;
 let dashboard, assetHistory;
+const managedOrders = [];
 const THEME_KEY = 'coincheck-local-theme';
 const num = (value, digits = 8) => value == null ? '—' : Number(value).toLocaleString('ja-JP', { maximumFractionDigits: digits });
 const time = value => value ? new Date(value).toLocaleTimeString('ja-JP', { hour12: false }) : '—';
@@ -91,7 +93,11 @@ async function api(path, body) {
     });
     const data = await response.json();
     if (response.status === 401 && data.code === 'login_required') requireLogin();
-    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(data.error || (data.status === 'rejected' ? '注文は拒否されました。残高・注文条件・API権限を確認してください。' : `HTTP ${response.status}`));
+      error.result = data;
+      throw error;
+    }
     return data;
   } catch (error) {
     if (error.name === 'AbortError' || error instanceof TypeError) {
@@ -301,10 +307,19 @@ function connect() {
 
 function updateForm() {
   const type = $('order-type').value, limit = ['buy', 'sell'].includes(type), marketBuy = type === 'market_buy';
+  if (!limit) $('order-policy').value = 'normal';
+  $('order-policy').disabled = !limit;
+  const policy = $('order-policy').value, managed = policy !== 'normal', gtd = policy === 'good_til_date';
+  $('expiry-field').hidden = !gtd; $('order-expiry').disabled = !gtd; $('order-expiry').required = gtd;
+  $('stop-loss').disabled = managed;
+  $('policy-help').hidden = !managed;
+  $('policy-help').textContent = gtd
+    ? '期限後に未約定分を取消します。サーバー停止・PCスリープ中は取消できず、再起動後も予約は復元されません。'
+    : '発注後すぐに未約定分の取消を要求します。取消までに約定する場合があり、即時取消は保証されません。';
   $('rate-field').hidden = !limit; $('rate').disabled = !limit; $('rate').required = limit;
   $('amount-field').hidden = marketBuy; $('amount').disabled = marketBuy; $('amount').required = !marketBuy;
   $('market-amount-field').hidden = !marketBuy; $('market-amount').disabled = !marketBuy; $('market-amount').required = marketBuy;
-  $('post-only-label').hidden = !limit; $('post-only').disabled = !limit;
+  $('post-only-label').hidden = !limit || managed; $('post-only').disabled = !limit || managed;
   const estimate = marketBuy ? Number($('market-amount').value) : limit ? Number($('rate').value) * Number($('amount').value) : 0;
   $('estimate').textContent = estimate > 0 ? `≈ ${num(estimate, 2)} JPY` : '—';
 }
@@ -325,14 +340,55 @@ async function submitOrder(event) {
   const data = { pair, order_type: $('order-type').value };
   for (const [key, value] of new FormData($('order-form'))) if (value && key !== 'order_type') data[key] = value.trim();
   if (!$('post-only').disabled && $('post-only').checked) data.time_in_force = 'post_only';
-  const description = [`通貨ペア: ${pair.toUpperCase()}`, `注文方法: ${typeLabels[data.order_type]}`, data.rate && `価格: ${data.rate} JPY`, data.amount && `数量: ${data.amount} ${coin()}`, data.market_buy_amount && `購入金額: ${data.market_buy_amount} JPY`, data.stop_loss_rate && `逆指値: ${data.stop_loss_rate} JPY`, data.time_in_force && 'Post only: 有効'].filter(Boolean).join('\n');
+  const policy = $('order-policy').value, expiry = $('order-expiry').value;
+  let prepared, entry;
+  try { prepared = prepareOrder(data, policy, expiry); }
+  catch (error) { notice(error.message, true); return; }
+  const description = [`通貨ペア: ${pair.toUpperCase()}`, `注文方法: ${typeLabels[data.order_type]}`, `有効期間: ${policyLabels[policy]}`, data.rate && `価格: ${data.rate} JPY`, data.amount && `数量: ${data.amount} ${coin()}`, data.market_buy_amount && `購入金額: ${data.market_buy_amount} JPY`, prepared.body.stop_loss_rate && `逆指値: ${data.stop_loss_rate} JPY`, prepared.body.time_in_force && 'Post only: 有効', prepared.body.expires_at && `取消期限: ${dateTime(prepared.body.expires_at)}`, policy !== 'normal' && $('policy-help').textContent].filter(Boolean).join('\n');
   setBusy(true);
   try {
     if (!await confirm('注文内容の確認', description)) return;
-    const response = await api('/api/orders', { ...data, request_id: crypto.randomUUID() });
-    notice(`注文を受け付けました。注文 ID: ${response.id ?? '取得待ち'}`);
-  } catch (error) { notice(error.message, true); }
-  finally { setBusy(false); await refreshPrivate(); }
+    prepared = prepareOrder(data, policy, expiry); // Revalidate a deadline after the confirmation dialog.
+    const requestId = crypto.randomUUID();
+    if (policy !== 'normal') {
+      entry = { path: `${prepared.path}/${requestId}`, policy, requestId, pair, expiresAt: prepared.body.expires_at, checking: true, result: null, message: '送信中…' };
+      managedOrders.unshift(entry); renderManagedOrders();
+    }
+    const response = await api(prepared.path, { ...prepared.body, request_id: requestId });
+    if (entry) { entry.result = response; entry.message = ''; }
+    notice(entry ? resultText(response) : `注文を受け付けました。注文 ID: ${response.id ?? '取得待ち'}`, !!response.requires_attention);
+  } catch (error) {
+    if (entry) {
+      entry.result = error.result?.status ? error.result : null;
+      entry.message = entry.result?.terminal ? error.message : `${error.message} 再発注せず、結果を照会してください。`;
+    }
+    notice(error.message, true);
+  }
+  finally { if (entry) { entry.checking = false; renderManagedOrders(); } setBusy(false); await refreshPrivate(); }
+}
+
+function renderManagedOrders() {
+  $('managed-orders-panel').hidden = managedOrders.length === 0;
+  $('managed-orders').replaceChildren(...managedOrders.map(entry => {
+    const card = document.createElement('article'); card.className = 'managed-order';
+    const title = document.createElement('strong'); title.textContent = `${policyLabels[entry.policy]} · ${entry.pair.toUpperCase()} · 注文 ${entry.result?.order_id || 'ID未確認'}`;
+    const status = document.createElement('p'); status.textContent = entry.message || resultText(entry.result);
+    if (entry.result?.requires_attention || entry.message && !entry.checking) status.className = 'valuation-warning';
+    const id = document.createElement('p'); id.className = 'muted'; id.textContent = `リクエストID: ${entry.requestId}${entry.expiresAt ? ` · 期限 ${dateTime(entry.expiresAt)}` : ''}`;
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'quiet'; button.textContent = entry.checking ? '確認中…' : '結果を照会'; button.disabled = entry.checking || !!entry.result?.terminal;
+    button.addEventListener('click', () => checkManagedOrder(entry));
+    card.append(title, status, id, button); return card;
+  }));
+}
+async function checkManagedOrder(entry) {
+  if (entry.checking || entry.result?.terminal || !session) return;
+  entry.checking = true; renderManagedOrders();
+  try { entry.result = await api(entry.path); entry.message = ''; }
+  catch (error) {
+    if (error.result?.status) { entry.result = error.result; entry.message = ''; }
+    else entry.message = error.result?.error || '結果を確認できません。再発注せず、接続と注文履歴を確認してください。';
+  }
+  finally { entry.checking = false; renderManagedOrders(); }
 }
 async function cancelOrder(order) {
   if (busy) return;
@@ -437,6 +493,9 @@ async function start() {
     if ($('pair').value !== pair) changePair();
     else { refreshPrivate(); connect(); refreshMarket(); refreshBook(); }
     setInterval(() => { if (!document.hidden) refreshMarket(); }, 15000);
+    setInterval(async () => {
+      if (!document.hidden) for (const entry of managedOrders) await checkManagedOrder(entry);
+    }, 30000);
     setInterval(() => { if (!document.hidden) { refreshBook(); refreshPrivate(); } }, 30000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshMarket(); refreshBook(); refreshPrivate(); } });
   } catch (error) { notice(error.message, true); }

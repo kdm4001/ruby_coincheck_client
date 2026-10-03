@@ -1,5 +1,9 @@
 # Unreleased
 
+* Added a home dashboard with a four-pair watchlist, quote freshness, fullscreen and optional screen wake lock.
+* Added server-side five-minute portfolio history with local persistence, account isolation, thirty-day retention and period charts.
+* Made GUI login duration configurable from one to 168 hours (eight hours by default).
+
 * Required a separate local GUI password, with hashed in-memory verification, expiring HttpOnly sessions, login throttling, logout, and authentication on all API/WebSocket routes.
 
 * Added a localhost-only Japanese trading dashboard with market data, balances, open orders, paginated execution history, order placement and cancellation.

@@ -5,6 +5,7 @@ require "securerandom"
 require "bigdecimal"
 require_relative "auth"
 require_relative "portfolio"
+require_relative "portfolio_history"
 require_relative "../lib/ruby_coincheck_client"
 require_relative "../lib/ruby_coincheck_client/websocket"
 
@@ -16,6 +17,8 @@ module RubyCoincheckClient
         "/login" => ["login.html", "text/html; charset=utf-8"],
         "/login.js" => ["login.js", "text/javascript; charset=utf-8"],
         "/app.js" => ["app.js", "text/javascript; charset=utf-8"],
+        "/dashboard.js" => ["dashboard.js", "text/javascript; charset=utf-8"],
+        "/asset-history.js" => ["asset-history.js", "text/javascript; charset=utf-8"],
         "/market.js" => ["market.js", "text/javascript; charset=utf-8"],
         "/style.css" => ["style.css", "text/css; charset=utf-8"]
       }.freeze
@@ -26,19 +29,56 @@ module RubyCoincheckClient
         "content-security-policy" => "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
       }.freeze
 
-      def initialize(login_password:, port: 9292, client: nil, authenticated: nil,
+      def initialize(login_password:, port: 9292, client: nil, authenticated: nil, session_seconds: Auth::SESSION_SECONDS,
+                     history_directory: nil,
                      clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
-        @auth = Auth.new(login_password, clock: clock)
+        @auth = Auth.new(login_password, session_seconds: session_seconds, clock: clock)
         @portfolio = Portfolio.new
         key = ENV["COINCHECK_API_KEY"]
         secret = ENV["COINCHECK_API_SECRET"]
         @authenticated = authenticated.nil? ? [key, secret].all? { |value| value && !value.empty? } : authenticated
         @client = client || Client.new(key, secret, open_timeout: 5, read_timeout: 10)
+        @history = PortfolioHistory.new(directory: history_directory)
+        @history.select_account(@authenticated ? key : nil)
+        @history_error = nil
+        @monitor_mutex = Mutex.new
+        @monitor_condition = ConditionVariable.new
         @hosts = ["127.0.0.1:#{port}", "localhost:#{port}"]
         @token = SecureRandom.hex(32)
         @api_mutex = Mutex.new
         @writes = {}
         @sockets = {} # Accessed only on the EventMachine reactor.
+      end
+
+      # Recording is server-owned so closing the browser or expiring its login
+      # does not leave gaps while the local server and API credentials remain.
+      def start_monitoring
+        return if @monitor_thread&.alive?
+        @monitoring = true
+        @monitor_thread = Thread.new do
+          loop do
+            @api_mutex.synchronize do
+              begin
+                portfolio_snapshot if @authenticated
+              rescue StandardError
+                @history_error = "資産の取得に失敗しました。次回の自動取得を待っています。"
+              end
+            end
+            running = @monitor_mutex.synchronize do
+              @monitor_condition.wait(@monitor_mutex, 60) if @monitoring
+              @monitoring
+            end
+            break unless running
+          end
+        end
+      end
+
+      def stop_monitoring
+        @monitor_mutex.synchronize do
+          @monitoring = false
+          @monitor_condition.broadcast
+        end
+        @monitor_thread&.join
       end
 
       def call(env)
@@ -141,7 +181,15 @@ module RubyCoincheckClient
         if request.get?
           case request.path
           when "/api/balance" then return json(200, @client.balance)
-          when "/api/portfolio" then return json(200, @portfolio.call(@client.balance))
+          when "/api/portfolio" then return json(200, portfolio_snapshot)
+          when "/api/portfolio/history"
+            days = Integer(request.params.fetch("days", "1"))
+            raise ArgumentError unless [1, 7, 30].include?(days)
+            begin
+              return json(200, points: @history.points(days: days), error: @history_error)
+            rescue StandardError
+              return json(200, points: [], error: "保存した履歴を読み込めません。data/portfolio を確認してください。")
+            end
           when "/api/orders" then return json(200, @client.orders(pair: pair(request)))
           when "/api/transactions"
             after = request.params["starting_after"]
@@ -181,13 +229,15 @@ module RubyCoincheckClient
         rescue StandardError
           return json(422, error: "接続確認に失敗しました。API キー・シークレット・残高参照権限・IP 制限と通信状態を確認してください。現在の設定は変更していません。")
         end
-        replace_client(candidate, authenticated: true)
+        replace_client(candidate, authenticated: true, account_key: values.first)
         session_response
       end
 
-      def replace_client(client, authenticated:)
+      def replace_client(client, authenticated:, account_key: nil)
         @client = client
         @authenticated = authenticated
+        @history.select_account(authenticated ? account_key : nil)
+        @history_error = nil
         @token = SecureRandom.hex(32)
         close_invalid_streams
       end
@@ -208,6 +258,17 @@ module RubyCoincheckClient
 
       def session_response
         json(200, token: @token, authenticated: @authenticated)
+      end
+
+      def portfolio_snapshot
+        data = @portfolio.call(@client.balance)
+        begin
+          @history.record(data)
+          @history_error = data[:missing_rates].empty? ? nil : "未評価の通貨があるため、この時点の総資産は記録していません。"
+        rescue StandardError
+          @history_error = "資産履歴を保存できません。data/portfolio の空き容量・書き込み権限を確認してください。"
+        end
+        data
       end
 
       def mutate(request)

@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Coincheck Local · 自分の取引デスク</title>
+  <title>Coincheck Local · ホームダッシュボード</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
-<body>
+<body data-view="dashboard">
   <header class="topbar">
     <a class="brand" href="/"><span class="brand-icon">C</span>Coincheck <span class="brand-local">LOCAL</span></a>
     <button id="mobile-menu-toggle" class="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="mobile-header-menu"><span></span><span></span><span></span><b class="sr-only">メニュー</b></button>
@@ -17,14 +17,25 @@
     <div id="mobile-header-menu" class="header-tools"><div class="connection"><span id="public-status" class="badge">相場 · 接続待ち</span><span id="private-status" class="badge">アカウント · 未接続</span></div><button id="theme-toggle" class="quiet theme-toggle" type="button" aria-label="ダークモードに切り替え">☾ ダーク</button><button id="open-settings" class="quiet">API キー設定</button><button id="logout" class="quiet">ログアウト</button></div>
   </header>
   <main>
-    <div class="page-heading"><div><p class="eyebrow">YOUR PORTFOLIO</p><h1>保有残高</h1></div><button id="refresh" class="quiet">↻ 更新</button></div>
+    <div class="page-heading"><div><p id="page-eyebrow" class="eyebrow">AT A GLANCE</p><h1 id="page-title">ホームダッシュボード</h1></div><div class="dashboard-actions"><button id="view-toggle" class="quiet">取引デスクへ</button><button id="fullscreen-toggle" class="quiet">全画面</button><button id="awake-toggle" class="quiet" aria-pressed="false">画面を点灯維持</button><button id="refresh" class="quiet">↻ 更新</button></div></div>
+    <section class="ambient-strip" aria-label="常時表示の状態"><div><time id="dashboard-clock">—</time><span id="dashboard-date"></span></div><span id="dashboard-health" role="status">相場を取得しています</span></section>
+    <section id="watchlist" class="watchlist" aria-label="主要4通貨の相場"></section>
     <div id="notice" class="notice" role="status" aria-live="polite">接続しています…</div>
     <div id="setup" class="setup" hidden><strong>相場は API キーなしで利用できます。</strong><span>残高・取引履歴・注文を使うには、右上の「API キー設定」から登録してください。</span></div>
+    <div class="overview-grid">
     <section id="portfolio" class="panel portfolio-panel" aria-labelledby="portfolio-title">
       <div class="portfolio-summary"><div class="portfolio-summary-main"><p class="eyebrow">TOTAL ASSETS <span>· JPY</span></p><h2>いまの総資産</h2><strong id="total-assets">—</strong><p id="valuation-status" class="muted">API キーを登録すると表示されます</p></div><div class="portfolio-orbit" aria-hidden="true"><span class="orbit-core">C</span><span class="orbit-ring ring-one"></span><span class="orbit-ring ring-two"></span><span class="orbit-dot dot-one"></span><span class="orbit-dot dot-two"></span></div></div>
       <div class="panel-heading"><h2 id="portfolio-title">通貨別残高</h2><span id="balance-status" class="muted">API キー未設定</span></div>
       <div class="table-scroll"><table><thead><tr><th>通貨</th><th>合計数量（借入控除後）</th><th>利用可能</th><th>注文中</th><th>日本円換算（概算）</th></tr></thead><tbody id="balances"><tr><td colspan="5" class="empty">API キーを設定すると表示されます</td></tr></tbody></table></div>
     </section>
+    <section class="panel asset-history-panel" aria-labelledby="asset-history-title">
+      <div class="panel-heading"><div><h2 id="asset-history-title">総資産の推移</h2><p id="asset-change" class="muted">記録がたまると変化を表示します</p></div><select id="asset-period" aria-label="資産推移の表示期間"><option value="1">24時間</option><option value="7">7日間</option><option value="30">30日間</option></select></div>
+      <div class="asset-chart-wrap"><div class="asset-chart-scale"><span id="asset-chart-high">—</span><span id="asset-chart-low">—</span></div><svg id="asset-chart" viewBox="0 0 800 160" role="img" aria-label="記録した総資産評価額の推移"><path id="asset-chart-line" class="chart-line" fill="none"></path><circle id="asset-chart-dot" r="3" fill="currentColor" hidden></circle></svg><p id="asset-chart-empty" class="muted">API キーを登録すると、5分間隔で記録を始めます</p></div>
+      <div class="chart-caption"><span id="asset-chart-start">—</span><span id="asset-chart-end">—</span></div>
+      <p id="asset-history-status" class="footnote">サーバー稼働中に記録 · 過去30日分をこのPCに保存</p>
+      <p class="footnote">評価額の増減には入出金・売買も含みます。運用損益ではありません。15分を超える記録の空白は線をつなぎません。</p>
+    </section>
+    </div>
     <div id="market" class="page-heading market-heading"><div><p class="eyebrow">MARKET PULSE</p><h2>マーケット</h2></div><div class="toolbar"><label for="pair">通貨ペア</label><select id="pair" aria-label="通貨ペア"><option value="btc_jpy">BTC / JPY</option><option value="eth_jpy">ETH / JPY</option><option value="xrp_jpy">XRP / JPY</option><option value="sol_jpy">SOL / JPY</option></select></div></div>
     <section class="metrics" aria-label="マーケット概要">
       <div class="metric primary"><span id="market-name">BTC / JPY</span><strong id="last-price">—</strong><small id="price-time">価格を取得中</small></div>

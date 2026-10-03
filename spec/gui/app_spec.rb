@@ -2,6 +2,7 @@
 
 require "spec_helper"
 require "rack/mock"
+require "tmpdir"
 require_relative "../../gui/app"
 
 RSpec.describe RubyCoincheckClient::GUI::App do
@@ -114,6 +115,32 @@ RSpec.describe RubyCoincheckClient::GUI::App do
   it "does not expose arbitrary local files" do
     expect(request.get("/.env", headers).status).to eq(404)
     expect(request.get("/../Gemfile", headers).status).to eq(404)
+  end
+
+  it "records a registered account in the background without an open browser" do
+    Dir.mktmpdir do |directory|
+      app = described_class.new(login_password: password, authenticated: false, history_directory: directory)
+      mock = Rack::MockRequest.new(app)
+      cookie = login_cookie(mock)
+      local_host = bare_host.merge("HTTP_COOKIE" => cookie)
+      local_token = JSON.parse(mock.get("/api/session", local_host).body).fetch("token")
+      local_headers = headers.merge(local_host).merge("HTTP_X_LOCAL_TOKEN" => local_token)
+      stub_request(:get, "https://coincheck.com/api/accounts/balance").to_return(body: '{"jpy":"1000"}')
+      response = mock.post("/api/credentials", local_headers.merge(input: JSON.generate(api_key: "history-key", api_secret: "secret")))
+      local_headers["HTTP_X_LOCAL_TOKEN"] = JSON.parse(response.body).fetch("token")
+      begin
+        app.start_monitoring
+        Timeout.timeout(3) do
+          sleep 0.01 until Dir[File.join(directory, "*.json")].any?
+        end
+        data = JSON.parse(mock.get("/api/portfolio/history?days=7", local_headers).body)
+        expect(data.fetch("points").first.fetch("total_jpy")).to eq("1000.0")
+        expect(mock.get("/api/portfolio/history?days=2", local_headers).status).to eq(400)
+        expect(mock.get("/api/portfolio/history", bare_host).status).to eq(401)
+      ensure
+        app.stop_monitoring
+      end
+    end
   end
 
   %w[btc_jpy eth_jpy xrp_jpy sol_jpy].each do |pair|

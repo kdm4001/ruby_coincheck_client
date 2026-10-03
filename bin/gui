@@ -17,7 +17,9 @@ unless password
   confirmation.clear
 end
 begin
-  app = RubyCoincheckClient::GUI::App.new(port: port, login_password: password)
+  session_hours = Integer(ENV.fetch("COINCHECK_GUI_SESSION_HOURS", "8"))
+  app = RubyCoincheckClient::GUI::App.new(port: port, login_password: password, session_seconds: session_hours * 3600,
+                                       history_directory: File.expand_path("../data/portfolio", __dir__))
 rescue ArgumentError => error
   abort error.message
 ensure
@@ -27,5 +29,7 @@ Faye::WebSocket.ensure_reactor_running
 server = Puma::Server.new(app)
 server.add_tcp_listener("127.0.0.1", port)
 puts "Coincheck Local: http://127.0.0.1:#{port} (Ctrl+C to stop)"
-%w[INT TERM].each { |signal| Signal.trap(signal) { Thread.new { server.stop(true); EventMachine.stop } } }
+puts "ログイン有効期間: #{session_hours} 時間"
+app.start_monitoring
+%w[INT TERM].each { |signal| Signal.trap(signal) { Thread.new { server.stop(true); app.stop_monitoring; EventMachine.stop } } }
 server.run.join

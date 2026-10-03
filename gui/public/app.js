@@ -1,3 +1,5 @@
+import { setupAssetHistory } from './asset-history.js';
+import { setupDashboard } from './dashboard.js';
 import { OrderBook, parseTrades, mergeTrades } from './market.js';
 
 const $ = id => document.getElementById(id);
@@ -10,6 +12,7 @@ let busy = false, bookLoading = false, privateLoading = false, marketLoading = f
 let privateTimer, publicLive = false;
 let volume24h = null;
 let settingsSaving = false;
+let dashboard, assetHistory;
 const THEME_KEY = 'coincheck-local-theme';
 const num = (value, digits = 8) => value == null ? '—' : Number(value).toLocaleString('ja-JP', { maximumFractionDigits: digits });
 const time = value => value ? new Date(value).toLocaleTimeString('ja-JP', { hour12: false }) : '—';
@@ -233,6 +236,7 @@ async function refreshPrivate() {
     loadHistory()
   ]);
   privateLoading = false;
+  assetHistory?.refresh();
   if (current !== generation) refreshPrivate();
 }
 function schedulePrivateRefresh() {
@@ -272,7 +276,7 @@ function connect() {
   if (socket) { socket.onclose = null; socket.close(); }
   const current = generation;
   socket = new WebSocket(`ws://${location.host}/stream?pair=${encodeURIComponent(pair)}`, ['coincheck-local', session.token]);
-  socket.onopen = () => { retry = 0; notice('接続しました。注文前に通貨ペアと入力内容を確認してください。'); };
+  socket.onopen = () => { retry = 0; notice('相場に接続しました。自動更新しています。'); };
   socket.onmessage = event => {
     if (current !== generation) return;
     try {
@@ -344,7 +348,7 @@ function changePair() {
   const next = $('pair').value.trim().toLowerCase();
   if (!supportedPairs.includes(next)) return;
   if (next === pair) return;
-  pair = next; generation++; marketLoading = false; bookLoading = false;
+  pair = next; dashboard?.selected(pair); generation++; marketLoading = false; bookLoading = false;
   const url = new URL(location.href); url.searchParams.set('pair', pair);
   window.history.replaceState(null, '', url);
   publicLive = false;
@@ -417,10 +421,16 @@ async function start() {
     $('settings-dialog').addEventListener('close', () => $('credentials-form').reset());
     $('credentials-form').addEventListener('submit', saveCredentials);
     $('clear-credentials').addEventListener('click', clearCredentials);
-    $('refresh').addEventListener('click', () => { refreshMarket(); refreshBook(); refreshPrivate(); });
+    $('refresh').addEventListener('click', () => { refreshMarket(); refreshBook(); refreshPrivate(); dashboard.refresh(); });
     $('more-history').addEventListener('click', () => loadHistory(true));
     $('order-form').addEventListener('submit', submitOrder);
     $('order-form').addEventListener('input', updateForm);
+    assetHistory = setupAssetHistory({ api, authenticated: session.authenticated });
+    dashboard = setupDashboard({ api, selectPair: next => {
+      if (busy) return;
+      $('pair').value = next; changePair();
+    } });
+    dashboard.selected(pair); dashboard.refresh();
     const requestedPair = new URL(location.href).searchParams.get('pair');
     $('pair').value = supportedPairs.includes(requestedPair) ? requestedPair : pair;
     updateForm(); renderBook(); renderTrades();

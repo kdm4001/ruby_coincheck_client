@@ -34,6 +34,24 @@ RSpec.describe RubyCoincheckClient::GUI::Auth do
     expect(auth.valid?(second)).to eq(false)
   end
 
+  it "supports an explicit long display session while retaining expiry and logout" do
+    auth = described_class.new(password, session_seconds: 604_800, clock: -> { clock.first })
+    _, id = auth.login(password)
+    clock[0] += described_class::SESSION_SECONDS
+    expect(auth.valid?(id)).to eq(true)
+    clock[0] += 604_800 - described_class::SESSION_SECONDS
+    expect(auth.valid?(id)).to eq(false)
+    _, id = auth.login(password)
+    auth.logout(id)
+    expect(auth.valid?(id)).to eq(false)
+  end
+
+  it "rejects unlimited or out-of-range display sessions" do
+    [nil, 0, -1, 3599, 604_801, Float::INFINITY].each do |duration|
+      expect { described_class.new(password, session_seconds: duration) }.to raise_error(ArgumentError)
+    end
+  end
+
   it "limits repeated failures even if requests claim different source addresses" do
     described_class::MAX_FAILURES.times { expect(auth.login("wrong").first).to eq(:invalid) }
     expect(auth.login(password).first).to eq(:limited)

@@ -15,10 +15,14 @@ module RubyCoincheckClient
       RETRY_SECONDS = 60
       MAX_SESSIONS = 16
 
-      def initialize(password, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
+      def initialize(password, session_seconds: SESSION_SECONDS, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
         unless password.is_a?(String) && password.length >= 12 && password.bytesize <= 1024 && !password.strip.empty?
           raise ArgumentError, "GUI password must be at least 12 characters and at most 1024 bytes"
         end
+        unless session_seconds.is_a?(Integer) && (3600..604_800).cover?(session_seconds)
+          raise ArgumentError, "GUI session duration must be between 1 and 168 hours"
+        end
+        @session_seconds = session_seconds
         @clock = clock
         @salt = SecureRandom.random_bytes(32)
         @password_hash = digest(password)
@@ -45,7 +49,7 @@ module RubyCoincheckClient
           @failures.clear
           @sessions.delete(previous_id)
           id = SecureRandom.hex(32)
-          @sessions[id] = now + SESSION_SECONDS
+          @sessions[id] = now + @session_seconds
           [:ok, id]
         end
       end

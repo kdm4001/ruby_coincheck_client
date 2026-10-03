@@ -310,7 +310,10 @@ function updateForm() {
   if (!limit) $('order-policy').value = 'normal';
   $('order-policy').disabled = !limit;
   const policy = $('order-policy').value, managed = policy !== 'normal', gtd = policy === 'good_til_date';
-  $('expiry-field').hidden = !gtd; $('order-expiry').disabled = !gtd; $('order-expiry').required = gtd;
+  const customExpiry = gtd && $('order-expiry-preset').value === 'custom';
+  $('expiry-field').hidden = !gtd; $('order-expiry-preset').disabled = !gtd;
+  $('expiry-custom-field').hidden = !customExpiry;
+  $('order-expiry-custom').disabled = !customExpiry; $('order-expiry-custom').required = customExpiry;
   $('stop-loss').disabled = managed;
   $('policy-help').hidden = !managed;
   $('policy-help').textContent = gtd
@@ -340,15 +343,18 @@ async function submitOrder(event) {
   const data = { pair, order_type: $('order-type').value };
   for (const [key, value] of new FormData($('order-form'))) if (value && key !== 'order_type') data[key] = value.trim();
   if (!$('post-only').disabled && $('post-only').checked) data.time_in_force = 'post_only';
-  const policy = $('order-policy').value, expiry = $('order-expiry').value;
+  const policy = $('order-policy').value;
+  const expiry = $('order-expiry-preset').value;
+  const customExpiry = $('order-expiry-custom').value;
   let prepared, entry;
-  try { prepared = prepareOrder(data, policy, expiry); }
+  try { prepared = prepareOrder(data, policy, expiry, Date.now(), customExpiry); }
   catch (error) { notice(error.message, true); return; }
   const description = [`通貨ペア: ${pair.toUpperCase()}`, `注文方法: ${typeLabels[data.order_type]}`, `有効期間: ${policyLabels[policy]}`, data.rate && `価格: ${data.rate} JPY`, data.amount && `数量: ${data.amount} ${coin()}`, data.market_buy_amount && `購入金額: ${data.market_buy_amount} JPY`, prepared.body.stop_loss_rate && `逆指値: ${data.stop_loss_rate} JPY`, prepared.body.time_in_force && 'Post only: 有効', prepared.body.expires_at && `取消期限: ${dateTime(prepared.body.expires_at)}`, policy !== 'normal' && $('policy-help').textContent].filter(Boolean).join('\n');
+  const confirmedExpiry = prepared.body.expires_at;
   setBusy(true);
   try {
     if (!await confirm('注文内容の確認', description)) return;
-    prepared = prepareOrder(data, policy, expiry); // Revalidate a deadline after the confirmation dialog.
+    prepared = prepareOrder(data, policy, confirmedExpiry || expiry, Date.now(), policy === 'good_til_date' && expiry === 'custom' ? customExpiry : ''); // Revalidate the confirmed absolute deadline.
     const requestId = crypto.randomUUID();
     if (policy !== 'normal') {
       entry = { path: `${prepared.path}/${requestId}`, policy, requestId, pair, expiresAt: prepared.body.expires_at, checking: true, result: null, message: '送信中…' };
@@ -481,6 +487,7 @@ async function start() {
     $('more-history').addEventListener('click', () => loadHistory(true));
     $('order-form').addEventListener('submit', submitOrder);
     $('order-form').addEventListener('input', updateForm);
+    $('order-expiry-preset').addEventListener('change', updateForm);
     assetHistory = setupAssetHistory({ api, authenticated: session.authenticated });
     dashboard = setupDashboard({ api, selectPair: next => {
       if (busy) return;

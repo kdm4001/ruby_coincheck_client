@@ -1,6 +1,6 @@
 export const policyLabels = { normal: '通常', immediate_or_cancel: '擬似IOC', good_til_date: 'GTD' };
 
-export function prepareOrder(data, policy, expiry, now = Date.now()) {
+export function prepareOrder(data, policy, expiry, now = Date.now(), customExpiry = '') {
   if (!Object.hasOwn(policyLabels, policy)) throw new Error('有効期間を確認してください。');
   const body = { ...data };
   if (policy === 'normal') return { path: '/api/orders', body };
@@ -8,7 +8,10 @@ export function prepareOrder(data, policy, expiry, now = Date.now()) {
   delete body.stop_loss_rate;
   delete body.time_in_force;
   if (policy === 'good_til_date') {
-    const deadline = new Date(expiry).getTime();
+    const minutes = Number(expiry);
+    const deadline = expiry !== 'custom' && Number.isInteger(minutes)
+      ? now + minutes * 60000
+      : new Date(customExpiry).getTime();
     if (!Number.isFinite(deadline) || deadline <= now || deadline > now + 7 * 86400000) {
       throw new Error('取消期限は現在より未来、7日以内で指定してください。');
     }
